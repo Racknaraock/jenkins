@@ -30,14 +30,13 @@ import hudson.security.HudsonPrivateSecurityRealm;
 import jenkins.model.Jenkins;
 import org.htmlunit.Page;
 import org.junit.jupiter.api.Test;
-import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.MockAuthorizationStrategy;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
 /**
- * Regression guard for JENKINS-62432: per-{@link Label}/{@link Computer} load statistics must
- * remain reachable with only {@link Jenkins#READ}, exactly as before. Only the root-level
+ * Regression guard: per-{@link Label}/{@link Computer} load statistics must remain reachable with
+ * only {@link Jenkins#READ}, exactly as before. Only the root-level
  * {@link Jenkins#overallLoad}/{@link Jenkins#unlabeledLoad} instances (see
  * {@link OverallLoadStatisticsReadOnlyModeTest}) were tightened to require
  * {@link Jenkins#SYSTEM_READ}/{@link Jenkins#MANAGE} - {@link LoadStatistics#doGraph} and
@@ -49,7 +48,6 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 @WithJenkins
 class LoadStatisticsPerNodeAccessUnchangedTest {
 
-    @Issue("JENKINS-62432")
     @Test
     void plainReadViewerCanStillReadLabelLoadStatisticsData(JenkinsRule j) throws Exception {
         HudsonPrivateSecurityRealm realm = new HudsonPrivateSecurityRealm(false, false, null);

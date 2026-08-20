@@ -26,7 +26,6 @@ package hudson.model;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.security.HudsonPrivateSecurityRealm;
 import jenkins.model.Jenkins;
@@ -34,7 +33,6 @@ import org.htmlunit.FailingHttpStatusCodeException;
 import org.htmlunit.Page;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.jvnet.hudson.test.MockAuthorizationStrategy;
 import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
@@ -73,7 +71,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         j.jenkins.setSecurityRealm(realm);
     }
 
-    @Issue("JENKINS-62432")
     @Test
     void systemReadViewerCanReadOverallLoadData() throws Exception {
         realm.createAccount("viewer", "viewer");
@@ -90,7 +87,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         assertEquals(200, graph.getWebResponse().getStatusCode());
     }
 
-    @Issue("JENKINS-62432")
     @Test
     void manageViewerCanReadOverallLoadData() throws Exception {
         realm.createAccount("manager", "manager");
@@ -104,7 +100,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         assertEquals(200, api.getWebResponse().getStatusCode());
     }
 
-    @Issue("JENKINS-62432")
     @Test
     void plainReadViewerCannotReadOverallLoadData() throws Exception {
         realm.createAccount("plainReader", "plainReader");
@@ -123,7 +118,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         assertEquals(403, graphEx.getStatusCode());
     }
 
-    @Issue("JENKINS-62432")
     @Test
     void plainReadViewerCannotReadUnlabeledLoadData() throws Exception {
         realm.createAccount("plainReader", "plainReader");
@@ -138,7 +132,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         assertEquals(403, apiEx.getStatusCode());
     }
 
-    @Issue("JENKINS-62432")
     @Test
     void systemReadViewerCanReadUnlabeledLoadData() throws Exception {
         realm.createAccount("viewer", "viewer");
@@ -149,6 +142,6 @@ class OverallLoadStatisticsReadOnlyModeTest {
         wc.login("viewer", "viewer");
 
         Page api = wc.goTo("unlabeledLoad/api/json", "application/json");
-        assertTrue(api.getWebResponse().getStatusCode() == 200);
+        assertEquals(200, api.getWebResponse().getStatusCode());
     }
 }
