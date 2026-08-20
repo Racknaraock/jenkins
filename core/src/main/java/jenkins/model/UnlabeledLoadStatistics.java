@@ -24,7 +24,9 @@
 
 package jenkins.model;
 
+import hudson.model.Api;
 import hudson.model.LoadStatistics;
+import hudson.model.MultiStageTimeSeries.TrendChart;
 import hudson.model.Node;
 import hudson.model.Node.Mode;
 import hudson.model.OverallLoadStatistics;
@@ -32,7 +34,9 @@ import hudson.model.Queue;
 import hudson.model.Queue.Task;
 import hudson.model.queue.SubTask;
 import hudson.util.Iterators;
+import java.io.IOException;
 import java.util.Iterator;
+import org.kohsuke.stapler.QueryParameter;
 
 /**
  * {@link LoadStatistics} that track the "free roam" jobs (whose {@link Task#getAssignedLabel()} is null)
@@ -59,6 +63,25 @@ public class UnlabeledLoadStatistics extends LoadStatistics {
     @Override
     protected boolean matches(Queue.Item item, SubTask subTask) {
         return item.getAssignedLabelFor(subTask) == null;
+    }
+
+    /**
+     * Unlike per-{@link hudson.model.Label}/{@link hudson.model.Computer} load statistics, this instance
+     * is a sibling of {@link Jenkins#overallLoad}: a root-level field with no dedicated page of its own,
+     * reachable directly at {@code unlabeledLoad/graph}/{@code unlabeledLoad/api/json}. Require the same
+     * permission as {@link Jenkins#overallLoad} rather than the base {@link Jenkins#READ} that
+     * {@link LoadStatistics#doGraph} otherwise allows.
+     */
+    @Override
+    public TrendChart doGraph(@QueryParameter String type) throws IOException {
+        Jenkins.get().checkAnyPermission(Jenkins.SYSTEM_READ, Jenkins.MANAGE);
+        return super.doGraph(type);
+    }
+
+    @Override
+    public Api getApi() {
+        Jenkins.get().checkAnyPermission(Jenkins.SYSTEM_READ, Jenkins.MANAGE);
+        return super.getApi();
     }
 
     private static class UnlabeledNodesIterable implements Iterable<Node> {

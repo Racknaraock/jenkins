@@ -27,9 +27,11 @@ package hudson.model;
 import hudson.model.MultiStageTimeSeries.TimeScale;
 import hudson.model.MultiStageTimeSeries.TrendChart;
 import hudson.model.queue.SubTask;
+import java.io.IOException;
 import jenkins.model.Jenkins;
 import org.kohsuke.accmod.Restricted;
 import org.kohsuke.accmod.restrictions.NoExternalUse;
+import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.export.Exported;
 
 /**
@@ -72,5 +74,23 @@ public class OverallLoadStatistics extends LoadStatistics {
      */
     protected TrendChart createOverallTrendChart(TimeScale timeScale) {
         return MultiStageTimeSeries.createTrendChart(timeScale, busyExecutors, onlineExecutors, queueLength, availableExecutors);
+    }
+
+    /**
+     * Unlike per-{@link Label}/{@link hudson.model.Computer} load statistics, this instance is only ever
+     * exposed through the admin-only "Manage Jenkins &gt; Load Statistics" page, so require the same
+     * permission as that page (see {@code jenkins/model/Jenkins/load-statistics.jelly}) rather than the
+     * base {@link Jenkins#READ} that {@link LoadStatistics#doGraph} otherwise allows.
+     */
+    @Override
+    public TrendChart doGraph(@QueryParameter String type) throws IOException {
+        Jenkins.get().checkAnyPermission(Jenkins.SYSTEM_READ, Jenkins.MANAGE);
+        return super.doGraph(type);
+    }
+
+    @Override
+    public Api getApi() {
+        Jenkins.get().checkAnyPermission(Jenkins.SYSTEM_READ, Jenkins.MANAGE);
+        return super.getApi();
     }
 }
