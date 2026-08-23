@@ -797,17 +797,37 @@ class FunctionsTest {
     }
 
     /**
-     * Prototype tests for JEP-0000. hudson.Messages coverage as of this commit: es=90%,
-     * fr=96%, tr=12%, no zh_CN/zh bundle exists at all (falls through to root/English).
-     * These are real translation states in this repository, not synthetic fixtures, so
-     * a future change to those .properties files could change these percentages enough
-     * to flip a case relative to the 0.5 threshold -- that coupling to real, evolving
-     * translation data is called out as a known risk in the JEP's Testing section.
+     * Prototype tests for JEP-0000. hudson.Messages coverage as of this commit (base bundle
+     * has 73 keys, counted via java.util.Properties -- an earlier hand count using a shell
+     * regex undercounted it as 69, which is why these percentages differ slightly from the
+     * JEP's own text if that text predates the fix): es=81%, fr=96%, tr=15%, no zh_CN/zh
+     * bundle exists at all (falls through to root/English). These are real translation
+     * states in this repository, not synthetic fixtures, so a future change to those
+     * .properties files could change these percentages enough to flip a case relative to
+     * the 0.5 threshold -- that coupling to real, evolving translation data is called out
+     * as a known risk in the JEP's Testing section.
      */
     @Test
     void getReliablePageLocale_returnsLocaleForWellTranslatedLanguage() {
         assertEquals(Locale.forLanguageTag("es"), Functions.getReliablePageLocale(Locale.forLanguageTag("es")));
         assertEquals(Locale.forLanguageTag("fr"), Functions.getReliablePageLocale(Locale.forLanguageTag("fr")));
+    }
+
+    /**
+     * Regression test for a real bug caught during review: the guard that detects whether
+     * ResourceBundle actually found a matching bundle (as opposed to silently falling back)
+     * used to reject any region-qualified request that resolved to a language-only bundle --
+     * which is the common case, since most Accept-Language headers are region-qualified
+     * ("fr-FR") while most of Jenkins core's translations are not ("Messages_fr.properties",
+     * no "_FR" variant). That bug meant the mechanism almost never declared a non-English
+     * locale for realistic browser traffic. These cases must resolve exactly like their
+     * bare-language equivalents.
+     */
+    @Test
+    void getReliablePageLocale_treatsRegionQualifiedRequestsLikeTheBareLanguage() {
+        assertEquals(Locale.forLanguageTag("fr-FR"), Functions.getReliablePageLocale(Locale.forLanguageTag("fr-FR")));
+        assertEquals(Locale.forLanguageTag("es-ES"), Functions.getReliablePageLocale(Locale.forLanguageTag("es-ES")));
+        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("tr-TR")));
     }
 
     @Test

@@ -2277,8 +2277,16 @@ public class Functions {
     }
 
     private static boolean localizedBundleMatches(Locale resolved, Locale requested) {
-        return resolved.equals(requested)
-                || (requested.getCountry().isEmpty() && resolved.getLanguage().equals(requested.getLanguage()));
+        // Deliberately language-only: a region-qualified request (e.g. "fr-FR") legitimately
+        // resolves to a language-only bundle ("fr") when no country-specific variant exists, and
+        // that is still a real, on-topic translation, not a fallback to a different language.
+        // Rejecting on country mismatch here (an earlier version of this method did) meant almost
+        // every real Accept-Language header, which is normally region-qualified, was treated as
+        // unreliable regardless of actual coverage. What must still be rejected is a resolved
+        // bundle whose language differs from what was requested at all -- root (language "") or,
+        // per ResourceBundle.Control's own fallback chain, the JVM default locale's bundle when
+        // that happens to differ from the requested language.
+        return !resolved.getLanguage().isEmpty() && resolved.getLanguage().equals(requested.getLanguage());
     }
 
     private static Set<String> loadOwnKeys(Locale locale) {
