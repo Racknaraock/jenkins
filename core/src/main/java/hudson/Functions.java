@@ -104,6 +104,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.Serializable;
@@ -142,12 +143,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.MissingResourceException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Properties;
+import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TimeZone;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
@@ -2194,6 +2200,100 @@ public class Functions {
         if (locale == null)
             locale = Locale.getDefault();
         return locale;
+    }
+
+    /**
+     * Prototype for JEP-0000 ("HTML Language Declaration for Jenkins Pages"): fraction (0.0-1.0)
+     * of keys in the {@code hudson.Messages} bundle a locale must have translated before
+     * {@link #getReliablePageLocale()} will vouch for it as the page's declared language.
+     * 0.5 is a starting point reflecting "the language used most" (WCAG 3.1.1's own definition
+     * of "default"), modeling each page as a two-language mixture of the negotiated locale and
+     * the English fallback; the exact value is a policy decision for the JEP's reviewers, not
+     * something this prototype asserts as final.
+     */
+    static final double LOCALE_RELIABILITY_THRESHOLD = 0.5;
+
+    private static final ConcurrentMap<Locale, Boolean> LOCALE_RELIABILITY_CACHE = new ConcurrentHashMap<>();
+
+    /**
+     * Like {@link #getCurrentLocale()}, but returns {@code null} instead of a locale whose
+     * translation coverage in Jenkins core is too low for it to be declared, with reasonable
+     * confidence, as the page's actually-dominant rendered language. See JEP-0000.
+     *
+     * <p>This is a prototype: coverage is sampled from a single representative bundle
+     * ({@code hudson.Messages}, included on every page via the header/footer/nav) rather than
+     * computed across the full set of resource bundles a given page draws from, and the cache
+     * is never invalidated (acceptable since bundle contents are fixed at deployment, not at
+     * runtime). Both simplifications are called out as follow-up work in the JEP.
+     */
+    public static @CheckForNull Locale getReliablePageLocale() {
+        return getReliablePageLocale(getCurrentLocale());
+    }
+
+    static @CheckForNull Locale getReliablePageLocale(Locale locale) {
+        return isReliablyLocalized(locale) ? locale : null;
+    }
+
+    private static boolean isReliablyLocalized(Locale locale) {
+        if (locale.getLanguage().isEmpty() || locale.getLanguage().equals(Locale.ENGLISH.getLanguage())) {
+            return true; // English is the source language of every string; always "translated."
+        }
+        return LOCALE_RELIABILITY_CACHE.computeIfAbsent(locale, Functions::computeLocaleReliability);
+    }
+
+    private static boolean computeLocaleReliability(Locale locale) {
+        ResourceBundle localized;
+        try {
+            localized = ResourceBundle.getBundle("hudson.Messages", locale);
+        } catch (MissingResourceException x) {
+            return false;
+        }
+        // ResourceBundle silently falls back to a parent bundle (e.g. "zh" or root/English) when
+        // no bundle exists for the exact requested locale; detect that so an untranslated locale
+        // isn't misreported as covered just because it fell back to a different bundle.
+        Locale resolved = localized.getLocale();
+        if (!localizedBundleMatches(resolved, locale)) {
+            return false;
+        }
+        // Deliberately NOT ResourceBundle#keySet()/#containsKey(): both walk the parent chain,
+        // so a bundle missing most of its own translations would still report every base key as
+        // present (inherited from the fallback), always scoring 100%. Reading the specific
+        // locale's .properties file directly, bypassing bundle inheritance, is what actually
+        // measures that file's own translation coverage.
+        Set<String> ownKeys = loadOwnKeys(resolved);
+        if (ownKeys.isEmpty()) {
+            return false;
+        }
+        Set<String> baseKeys = loadOwnKeys(Locale.ROOT);
+        int total = 0;
+        int translated = 0;
+        for (String key : baseKeys) {
+            total++;
+            if (ownKeys.contains(key)) {
+                translated++;
+            }
+        }
+        return total > 0 && ((double) translated / total) >= LOCALE_RELIABILITY_THRESHOLD;
+    }
+
+    private static boolean localizedBundleMatches(Locale resolved, Locale requested) {
+        return resolved.equals(requested)
+                || (requested.getCountry().isEmpty() && resolved.getLanguage().equals(requested.getLanguage()));
+    }
+
+    private static Set<String> loadOwnKeys(Locale locale) {
+        String suffix = locale.toString(); // e.g. "tr", "zh_TW", "pt_BR", or "" for root
+        String resourceName = "/hudson/Messages" + (suffix.isEmpty() ? "" : "_" + suffix) + ".properties";
+        Properties props = new Properties();
+        try (InputStream in = Functions.class.getResourceAsStream(resourceName)) {
+            if (in == null) {
+                return Set.of();
+            }
+            props.load(in);
+        } catch (IOException x) {
+            return Set.of();
+        }
+        return props.stringPropertyNames();
     }
 
     /**

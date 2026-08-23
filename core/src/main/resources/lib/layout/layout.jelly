@@ -101,7 +101,11 @@ THE SOFTWARE.
   </j:if>
 </j:if>
 <x:doctype name="html" />
-<html lang="${h.getCurrentLocale().toLanguageTag()}" data-disable-sticky="${h.stickyPositioningDisabled}">
+<j:set var="pageLocale" value="${h.getReliablePageLocale()}"/>
+<!-- JEP-0000: lang is left as the empty string (its HTML-spec-defined meaning is
+     "primary language unknown") when Jenkins core's translation coverage for the
+     negotiated locale is too low to vouch for it as the page's actual dominant language. -->
+<html lang="${pageLocale != null ? pageLocale.toLanguageTag() : ''}" data-disable-sticky="${h.stickyPositioningDisabled}">
   <head data-rooturl="${rootURL}" data-resurl="${resURL}" data-imagesurl="${imagesURL}" resURL="${resURL}"
         data-extensions-available="${extensionsAvailable}"
         data-crumb-header="${h.getCrumbRequestField()}" data-crumb-value="${h.getCrumb(request2)}"

@@ -796,4 +796,33 @@ class FunctionsTest {
         }
     }
 
+    /**
+     * Prototype tests for JEP-0000. hudson.Messages coverage as of this commit: es=90%,
+     * fr=96%, tr=12%, no zh_CN/zh bundle exists at all (falls through to root/English).
+     * These are real translation states in this repository, not synthetic fixtures, so
+     * a future change to those .properties files could change these percentages enough
+     * to flip a case relative to the 0.5 threshold -- that coupling to real, evolving
+     * translation data is called out as a known risk in the JEP's Testing section.
+     */
+    @Test
+    void getReliablePageLocale_returnsLocaleForWellTranslatedLanguage() {
+        assertEquals(Locale.forLanguageTag("es"), Functions.getReliablePageLocale(Locale.forLanguageTag("es")));
+        assertEquals(Locale.forLanguageTag("fr"), Functions.getReliablePageLocale(Locale.forLanguageTag("fr")));
+    }
+
+    @Test
+    void getReliablePageLocale_returnsNullForPoorlyTranslatedLanguage() {
+        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("tr")));
+    }
+
+    @Test
+    void getReliablePageLocale_returnsNullWhenNoBundleExistsAtAll() {
+        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("zh-CN")));
+    }
+
+    @Test
+    void getReliablePageLocale_alwaysTrustsEnglish() {
+        assertEquals(Locale.ENGLISH, Functions.getReliablePageLocale(Locale.ENGLISH));
+    }
+
 }
