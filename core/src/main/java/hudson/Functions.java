@@ -2203,16 +2203,18 @@ public class Functions {
 
     /**
      * Prototype for JEP-0000 ("WCAG 2.2 Conformance Strategy for Jenkins Core"): fraction
-     * (0.0-1.0) of keys across {@link #COVERAGE_SAMPLE_BUNDLES} a locale must have translated
-     * before {@link #getReliablePageLocale()} will declare it, rather than English, as the
-     * page's language. 0.5 is a starting point reflecting "the language used most" (WCAG
-     * 3.1.1's own definition of "default"), modeling each page as a two-language mixture of the
-     * negotiated locale and the English fallback; the exact value is a policy decision for the
-     * JEP's reviewers, not something this prototype asserts as final. Per SC 3.1.1's own
-     * tie-break rule ("if several languages are used equally, the first language used ... should
-     * be chosen" -- here, the English page chrome, which is always present), a locale sitting
+     * (0.0-1.0) of the rendered-text weight across {@link #COVERAGE_SAMPLE_BUNDLES} (see
+     * {@link #countWords}) a locale must have translated before
+     * {@link #getReliablePageLocale()} will declare it, rather than English, as the page's
+     * language. 0.5 is a starting point reflecting "the language used most" (WCAG 3.1.1's own
+     * definition of "default"), modeling each page as a two-language mixture of the negotiated
+     * locale and the English fallback; the exact value is a policy decision for the JEP's
+     * reviewers, not something this prototype asserts as final. Per SC 3.1.1's own tie-break
+     * rule ("if several languages are used equally, the first language used ... should be
+     * chosen" -- here, the English page chrome, which is always present), a locale sitting
      * exactly at the threshold does not qualify; see the strict {@code >} in
-     * {@link #computeLocaleReliability}.
+     * {@link #computeLocaleReliability}. This matters in practice, not just in principle: `ja`
+     * measures 50.2% by this metric, inside the strict-{@code >} tie-break by 0.2 points.
      */
     static final double LOCALE_RELIABILITY_THRESHOLD = 0.5;
 
@@ -2248,15 +2250,81 @@ public class Functions {
             "hudson/triggers/Messages",
             "hudson/node_monitors/Messages");
 
+    private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]*>");
+    private static final Pattern MESSAGEFORMAT_PLACEHOLDER_PATTERN = Pattern.compile("\\{\\d+(?:,[^}]*)?}");
+    private static final Pattern HTML_ENTITY_PATTERN = Pattern.compile("&[a-zA-Z#0-9]+;");
+    private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
+
+    /**
+     * Rendered-text weight of an English base string, in words -- used so coverage reflects how
+     * much text a key actually represents, not just whether it exists (a locale can translate
+     * 90% of its <em>keys</em> while those are the short, high-visibility ones, leaving most of
+     * the page's actual <em>text</em> untranslated). Deliberately called only on the English
+     * base string, never on a translation: tokenizing translated text was tried and rejected --
+     * for `ja`/`zh_TW`, word-count and character-count of the *translated* string disagree by
+     * 20-40 points with each other, because those scripts have no whitespace word boundaries.
+     * Weighting by the English source gives one common yardstick for every locale and sidesteps
+     * CJK segmentation entirely. Strips {@code <tag>} markup, {@code {0}}/{@code {0,number}}
+     * -style {@link java.text.MessageFormat} placeholders, and HTML entities before counting,
+     * since none of those are rendered as translatable words.
+     */
+    static int countWords(String englishValue) {
+        String s = HTML_TAG_PATTERN.matcher(englishValue).replaceAll(" ");
+        s = MESSAGEFORMAT_PLACEHOLDER_PATTERN.matcher(s).replaceAll(" ");
+        s = HTML_ENTITY_PATTERN.matcher(s).replaceAll(" ");
+        s = s.trim();
+        if (s.isEmpty()) {
+            return 0;
+        }
+        return WHITESPACE_PATTERN.split(s).length;
+    }
+
+    // Per-bundle base (English) word-weight per key, computed once: base bundle contents are
+    // fixed at deployment, not at runtime, so there is no reason to recompute this on every
+    // reliability check the way the per-locale translated-key lookup below has to.
+    private static final Map<String, Map<String, Integer>> BASE_WEIGHTS = computeBaseWeights();
+    private static final long TOTAL_BASE_WEIGHT =
+            BASE_WEIGHTS.values().stream().flatMap(m -> m.values().stream()).mapToLong(Integer::longValue).sum();
+
+    private static Map<String, Map<String, Integer>> computeBaseWeights() {
+        Map<String, Map<String, Integer>> result = new HashMap<>();
+        for (String bundleBase : COVERAGE_SAMPLE_BUNDLES) {
+            Map<String, Integer> weights = new HashMap<>();
+            for (Map.Entry<String, String> entry : loadOwnEntries(bundleBase, Locale.ROOT).entrySet()) {
+                weights.put(entry.getKey(), countWords(entry.getValue()));
+            }
+            result.put(bundleBase, weights);
+        }
+        return Map.copyOf(result);
+    }
+
+    /**
+     * Languages within {@link #COVERAGE_SAMPLE_BUNDLES} that ship more than one script- or
+     * region-distinct translation -- today, only Chinese: {@code hudson/win32errors} aside (not
+     * sampled, see above), core ships a real, well-covered {@code Messages_zh_TW.properties}
+     * (Traditional Chinese) but no bare {@code zh} or {@code zh_CN} bundle at all. For every
+     * other sampled language a region tag is cosmetic (`fr-FR` and `fr-CA` share one `fr`
+     * bundle), so stripping it before resolution and caching by language alone is correct and
+     * keeps the reliability cache's key space bounded. Chinese needs the region kept: a client
+     * requesting `zh-TW` must resolve against `Messages_zh_TW.properties`, not against a
+     * language-only `zh` that no bundle in this sample actually provides. Hand-maintained rather
+     * than discovered by scanning the classpath at runtime; revisit if a second
+     * region-differentiated language is ever added to the sample. The {@link #LOCALE_RELIABILITY_CACHE}
+     * cap below is what keeps this from reopening unbounded cache growth for `zh-*` specifically.
+     */
+    private static final Set<String> REGION_SIGNIFICANT_LANGUAGES = Set.of("zh");
+
     private static final int LOCALE_RELIABILITY_CACHE_MAX_SIZE = 256;
 
-    // Keyed by ISO language subtag (e.g. "fr"), not the full requested Locale: a region- or
-    // variant-qualified Accept-Language header carries unbounded cardinality an attacker could
-    // otherwise use to grow an unbounded cache indefinitely, and this mechanism's own bundle
-    // resolution (see #localizedBundleMatches) is language-only anyway, so the extra
-    // granularity was never meaningful. Bounded (LRU-evicted) as defense in depth on top of
-    // that: the ~184 real ISO 639 language codes never come close to evicting each other, and a
-    // request fuzzing invalid subtags cannot grow this past a small, fixed size.
+    // Keyed by BCP-47 language tag (e.g. "fr", or "zh-TW" for the one language in
+    // REGION_SIGNIFICANT_LANGUAGES), not the full requested Locale with every region/variant
+    // subtag: an arbitrary region- or variant-qualified Accept-Language header otherwise carries
+    // unbounded cardinality an attacker could use to grow an unbounded cache indefinitely, and
+    // for every language but Chinese the extra granularity was never meaningful anyway (see
+    // REGION_SIGNIFICANT_LANGUAGES). Bounded (LRU-evicted) as defense in depth on top of that:
+    // the ~184 real ISO 639 language codes, plus the handful of real Chinese region tags, never
+    // come close to evicting each other, and a request fuzzing invalid subtags cannot grow this
+    // past a small, fixed size.
     private static final Map<String, Boolean> LOCALE_RELIABILITY_CACHE =
             Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
@@ -2292,30 +2360,29 @@ public class Functions {
         if (language.isEmpty() || language.equals(Locale.ENGLISH.getLanguage())) {
             return true; // English is the source language of every string; always "translated."
         }
-        return LOCALE_RELIABILITY_CACHE.computeIfAbsent(language, Functions::computeLocaleReliability);
+        Locale resolutionLocale = REGION_SIGNIFICANT_LANGUAGES.contains(language) ? locale : new Locale(language);
+        String cacheKey = resolutionLocale.toLanguageTag();
+        return LOCALE_RELIABILITY_CACHE.computeIfAbsent(cacheKey, k -> computeLocaleReliability(resolutionLocale));
     }
 
-    private static boolean computeLocaleReliability(String language) {
-        Locale languageOnly = new Locale(language);
-        int total = 0;
-        int translated = 0;
+    private static boolean computeLocaleReliability(Locale resolutionLocale) {
+        long translatedWeight = 0;
         for (String bundleBase : COVERAGE_SAMPLE_BUNDLES) {
-            Set<String> baseKeys = loadOwnKeys(bundleBase, Locale.ROOT);
-            if (baseKeys.isEmpty()) {
+            Map<String, Integer> weights = BASE_WEIGHTS.get(bundleBase);
+            if (weights == null || weights.isEmpty()) {
                 continue; // shouldn't happen for a real entry in COVERAGE_SAMPLE_BUNDLES
             }
-            total += baseKeys.size();
             Locale resolved;
             try {
-                resolved = ResourceBundle.getBundle(bundleBase.replace('/', '.'), languageOnly).getLocale();
+                resolved = ResourceBundle.getBundle(bundleBase.replace('/', '.'), resolutionLocale).getLocale();
             } catch (MissingResourceException x) {
-                continue; // no bundle at all for this language; contributes 0 translated keys
+                continue; // no bundle at all for this locale; contributes 0 translated weight
             }
             // ResourceBundle silently falls back to a parent bundle (root/English, or a
             // different language via the JVM default) when no bundle exists for the exact
             // requested locale; detect that so an untranslated locale isn't misreported as
             // covered just because it fell back to a different bundle.
-            if (!localizedBundleMatches(resolved, languageOnly)) {
+            if (!localizedBundleMatches(resolved, resolutionLocale)) {
                 continue;
             }
             // Deliberately NOT ResourceBundle#keySet()/#containsKey(): both walk the parent
@@ -2324,13 +2391,13 @@ public class Functions {
             // the specific locale's .properties file directly, bypassing bundle inheritance, is
             // what actually measures that file's own translation coverage.
             Set<String> ownKeys = loadOwnKeys(bundleBase, resolved);
-            for (String key : baseKeys) {
-                if (ownKeys.contains(key)) {
-                    translated++;
+            for (Map.Entry<String, Integer> entry : weights.entrySet()) {
+                if (ownKeys.contains(entry.getKey())) {
+                    translatedWeight += entry.getValue();
                 }
             }
         }
-        return total > 0 && ((double) translated / total) > LOCALE_RELIABILITY_THRESHOLD;
+        return TOTAL_BASE_WEIGHT > 0 && ((double) translatedWeight / TOTAL_BASE_WEIGHT) > LOCALE_RELIABILITY_THRESHOLD;
     }
 
     private static boolean localizedBundleMatches(Locale resolved, Locale requested) {
@@ -2347,18 +2414,26 @@ public class Functions {
     }
 
     private static Set<String> loadOwnKeys(String bundleBase, Locale locale) {
+        return loadOwnEntries(bundleBase, locale).keySet();
+    }
+
+    private static Map<String, String> loadOwnEntries(String bundleBase, Locale locale) {
         String suffix = locale.toString(); // e.g. "tr", "zh_TW", "pt_BR", or "" for root
         String resourceName = "/" + bundleBase + (suffix.isEmpty() ? "" : "_" + suffix) + ".properties";
         Properties props = new Properties();
         try (InputStream in = Functions.class.getResourceAsStream(resourceName)) {
             if (in == null) {
-                return Set.of();
+                return Map.of();
             }
             props.load(in);
         } catch (IOException x) {
-            return Set.of();
+            return Map.of();
         }
-        return props.stringPropertyNames();
+        Map<String, String> result = new HashMap<>();
+        for (String key : props.stringPropertyNames()) {
+            result.put(key, props.getProperty(key));
+        }
+        return result;
     }
 
     /**

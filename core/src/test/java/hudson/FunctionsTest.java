@@ -798,18 +798,18 @@ class FunctionsTest {
 
     /**
      * Prototype tests for JEP-0000. Coverage aggregated across
-     * {@link Functions#COVERAGE_SAMPLE_BUNDLES} (13 bundles, 759 base keys total) as of this
-     * commit, counted via java.util.Properties: es=61%, fr=78%, tr=27%, sr=71%, ja=58%, no
-     * zh_CN/zh bundle exists at all for any sampled bundle (falls through to English). sr and
-     * ja are deliberately included here even though both were *excluded* under an earlier,
-     * single-bundle version of this measurement (46.6% and 39.7% against hudson.Messages
-     * alone) -- aggregating over more of core's UI text changed which side of the 0.5
-     * threshold they fall on, which is exactly the sampling-bias risk independent review
-     * flagged against the single-bundle version. These are real translation states in this
-     * repository, not synthetic fixtures, so a future change to any sampled .properties file
-     * could shift these percentages enough to flip a case relative to the threshold -- that
-     * coupling to real, evolving translation data is called out as a known risk in the JEP's
-     * Testing section.
+     * {@link Functions#COVERAGE_SAMPLE_BUNDLES} (13 bundles, 759 base keys, ~5100 base
+     * English words), weighted by {@link Functions#countWords} rather than by raw key count as
+     * of this commit -- key-count coverage was shown, empirically, to systematically overstate
+     * word-count coverage for every non-English locale measured (translators tend to translate
+     * short, high-visibility strings first), by a mean of roughly 5 points and up to 10+ points
+     * for some locales. Approximate word-weighted figures as of this commit: es=61%, fr=76%,
+     * tr=16%, sr=62%, ja=~50% (see below), no zh_CN/zh bundle exists at all for any sampled
+     * bundle (falls through to English). These are real translation states in this repository,
+     * not synthetic fixtures, so a future change to any sampled .properties file could shift
+     * these percentages enough to flip a case relative to the threshold -- that coupling to
+     * real, evolving translation data is called out as a known risk in the JEP's Testing
+     * section.
      */
     @Test
     void getReliablePageLocale_returnsLocaleForWellTranslatedLanguage() {
@@ -819,13 +819,33 @@ class FunctionsTest {
 
     /**
      * Aggregating coverage across more of core's UI text (rather than a single bundle) moves
-     * sr and ja from excluded to included -- direct evidence that the single-bundle
-     * measurement this prototype originally shipped with was not a reliable proxy for a
-     * locale's actual, page-wide translation state.
+     * sr from excluded to included -- direct evidence that the single-bundle measurement this
+     * prototype originally shipped with was not a reliable proxy for a locale's actual,
+     * page-wide translation state. ja is intentionally NOT asserted here even though it also
+     * moved from excluded (single-bundle key-count) to included (13-bundle key-count): under
+     * word-weighting, ja measures right at ~50%, inside the noise of reasonable tokenization
+     * choices -- see {@link #getReliablePageLocale_jaSitsAtTheMeasurementBoundary}, which
+     * documents that marginality explicitly instead of asserting a specific side of it as if
+     * it were a confident measurement.
      */
     @Test
     void getReliablePageLocale_widerSamplingIncludesLocalesTheSingleBundleMeasurementExcluded() {
         assertEquals(Locale.forLanguageTag("sr"), Functions.getReliablePageLocale(Locale.forLanguageTag("sr")));
+    }
+
+    /**
+     * ja is deliberately its own test, not folded into the "wider sampling includes" case
+     * above: word-weighted coverage measures right at the 0.5 threshold (roughly 50%, inside
+     * the noise of reasonable tokenization/regex choices for stripping placeholders and HTML
+     * from the ~5100-word base sample), so its classification is genuinely marginal, resolved
+     * by the strict {@code >} tie-break rule in {@code LOCALE_RELIABILITY_THRESHOLD} rather
+     * than by a confident measurement either way. This test documents CURRENT behavior (as of
+     * this commit, ja clears the threshold and is declared) precisely so that a future change
+     * to any of the 13 sampled bundles' Japanese translation -- even a small one -- that flips
+     * this assertion is expected, informative, and not a surprise regression.
+     */
+    @Test
+    void getReliablePageLocale_jaSitsAtTheMeasurementBoundary() {
         assertEquals(Locale.forLanguageTag("ja"), Functions.getReliablePageLocale(Locale.forLanguageTag("ja")));
     }
 
@@ -869,6 +889,21 @@ class FunctionsTest {
     @Test
     void getReliablePageLocale_alwaysTrustsEnglish() {
         assertEquals(Locale.ENGLISH, Functions.getReliablePageLocale(Locale.ENGLISH));
+    }
+
+    /**
+     * Regression test for the {@code zh-TW} resolution bug caught during independent review:
+     * an earlier version of this prototype stripped region from every request before bundle
+     * resolution (see {@code REGION_SIGNIFICANT_LANGUAGES}), which meant a {@code zh-TW}
+     * request could never match {@code Messages_zh_TW.properties} -- the only Chinese bundle
+     * core actually ships -- and silently fell back to English despite Jenkins having a real,
+     * well-covered Traditional Chinese translation. Language-only stripping is correct for
+     * every other sampled language (e.g. {@code fr-FR} legitimately shares the {@code fr}
+     * bundle), so this is Chinese-specific, not a reversion of that fix.
+     */
+    @Test
+    void getReliablePageLocale_resolvesRegionSignificantChineseCorrectly() {
+        assertEquals(Locale.forLanguageTag("zh-TW"), Functions.getReliablePageLocale(Locale.forLanguageTag("zh-TW")));
     }
 
 }
