@@ -140,6 +140,7 @@ import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -152,8 +153,6 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TimeZone;
 import java.util.TreeMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
@@ -2203,77 +2202,135 @@ public class Functions {
     }
 
     /**
-     * Prototype for JEP-0000 ("HTML Language Declaration for Jenkins Pages"): fraction (0.0-1.0)
-     * of keys in the {@code hudson.Messages} bundle a locale must have translated before
-     * {@link #getReliablePageLocale()} will vouch for it as the page's declared language.
-     * 0.5 is a starting point reflecting "the language used most" (WCAG 3.1.1's own definition
-     * of "default"), modeling each page as a two-language mixture of the negotiated locale and
-     * the English fallback; the exact value is a policy decision for the JEP's reviewers, not
-     * something this prototype asserts as final.
+     * Prototype for JEP-0000 ("WCAG 2.2 Conformance Strategy for Jenkins Core"): fraction
+     * (0.0-1.0) of keys across {@link #COVERAGE_SAMPLE_BUNDLES} a locale must have translated
+     * before {@link #getReliablePageLocale()} will declare it, rather than English, as the
+     * page's language. 0.5 is a starting point reflecting "the language used most" (WCAG
+     * 3.1.1's own definition of "default"), modeling each page as a two-language mixture of the
+     * negotiated locale and the English fallback; the exact value is a policy decision for the
+     * JEP's reviewers, not something this prototype asserts as final. Per SC 3.1.1's own
+     * tie-break rule ("if several languages are used equally, the first language used ... should
+     * be chosen" -- here, the English page chrome, which is always present), a locale sitting
+     * exactly at the threshold does not qualify; see the strict {@code >} in
+     * {@link #computeLocaleReliability}.
      */
     static final double LOCALE_RELIABILITY_THRESHOLD = 0.5;
 
-    private static final ConcurrentMap<Locale, Boolean> LOCALE_RELIABILITY_CACHE = new ConcurrentHashMap<>();
+    /**
+     * Base names (classpath-relative, no leading slash, no {@code .properties} extension) of
+     * the core resource bundles this prototype aggregates translation coverage across: the 13
+     * largest general-purpose UI-string bundles in {@code core/src/main/resources} by base
+     * (English) key count, 759 keys total. Deliberately excludes {@code hudson/win32errors}
+     * despite it being core's single largest bundle (1024 keys): it is a lookup table of
+     * Windows system error codes, not rendered page copy, and ships translations for only 5 of
+     * the ~40 locales Jenkins core otherwise supports (es, fr, it, ja, pt_BR) -- including it
+     * would understate every other locale's coverage for a reason unrelated to how well that
+     * locale's actual UI is translated.
+     *
+     * <p>This list is itself a reviewable parameter, not a derived value, and is a known,
+     * disclosed simplification: it samples 13 of core's ~338 bundles and cannot see
+     * plugin-contributed bundles at all, so it is a proxy for a given page's actual language
+     * composition, not a per-page measurement. See JEP-0000's Work Estimates for the follow-up
+     * to broaden this sample.
+     */
+    static final List<String> COVERAGE_SAMPLE_BUNDLES = List.of(
+            "hudson/model/Messages",
+            "hudson/Messages",
+            "hudson/cli/Messages",
+            "jenkins/security/Messages",
+            "hudson/tasks/Messages",
+            "jenkins/model/Messages",
+            "jenkins/management/Messages",
+            "hudson/security/Messages",
+            "hudson/slaves/Messages",
+            "hudson/util/Messages",
+            "hudson/model/userproperty/Messages",
+            "hudson/triggers/Messages",
+            "hudson/node_monitors/Messages");
+
+    private static final int LOCALE_RELIABILITY_CACHE_MAX_SIZE = 256;
+
+    // Keyed by ISO language subtag (e.g. "fr"), not the full requested Locale: a region- or
+    // variant-qualified Accept-Language header carries unbounded cardinality an attacker could
+    // otherwise use to grow an unbounded cache indefinitely, and this mechanism's own bundle
+    // resolution (see #localizedBundleMatches) is language-only anyway, so the extra
+    // granularity was never meaningful. Bounded (LRU-evicted) as defense in depth on top of
+    // that: the ~184 real ISO 639 language codes never come close to evicting each other, and a
+    // request fuzzing invalid subtags cannot grow this past a small, fixed size.
+    private static final Map<String, Boolean> LOCALE_RELIABILITY_CACHE =
+            Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > LOCALE_RELIABILITY_CACHE_MAX_SIZE;
+                }
+            });
 
     /**
-     * Like {@link #getCurrentLocale()}, but returns {@code null} instead of a locale whose
-     * translation coverage in Jenkins core is too low for it to be declared, with reasonable
-     * confidence, as the page's actually-dominant rendered language. See JEP-0000.
+     * Like {@link #getCurrentLocale()}, but substitutes {@link Locale#ENGLISH} for a locale
+     * whose translation coverage in Jenkins core is too low for it to be declared, with
+     * reasonable confidence, as the page's actually-dominant rendered language. Untranslated
+     * content in Jenkins core always falls back to English (see {@link #COVERAGE_SAMPLE_BUNDLES}
+     * et al.), so below the threshold, English -- not the negotiated locale -- is what SC
+     * 3.1.1 itself defines as "the language used most" on that page; declaring it is an
+     * evidence-based determination, not a refusal to answer. See JEP-0000.
      *
-     * <p>This is a prototype: coverage is sampled from a single representative bundle
-     * ({@code hudson.Messages}, included on every page via the header/footer/nav) rather than
-     * computed across the full set of resource bundles a given page draws from, and the cache
-     * is never invalidated (acceptable since bundle contents are fixed at deployment, not at
-     * runtime). Both simplifications are called out as follow-up work in the JEP.
+     * <p>This is a prototype: coverage is sampled from {@link #COVERAGE_SAMPLE_BUNDLES} (13 of
+     * core's ~338 bundles) rather than the full set of resource bundles a given page draws
+     * from, and cannot see plugin-contributed bundles at all -- both called out as follow-up
+     * work in the JEP's Work Estimates.
      */
-    public static @CheckForNull Locale getReliablePageLocale() {
+    public static @NonNull Locale getReliablePageLocale() {
         return getReliablePageLocale(getCurrentLocale());
     }
 
-    static @CheckForNull Locale getReliablePageLocale(Locale locale) {
-        return isReliablyLocalized(locale) ? locale : null;
+    static @NonNull Locale getReliablePageLocale(Locale locale) {
+        return isReliablyLocalized(locale) ? locale : Locale.ENGLISH;
     }
 
     private static boolean isReliablyLocalized(Locale locale) {
-        if (locale.getLanguage().isEmpty() || locale.getLanguage().equals(Locale.ENGLISH.getLanguage())) {
+        String language = locale.getLanguage();
+        if (language.isEmpty() || language.equals(Locale.ENGLISH.getLanguage())) {
             return true; // English is the source language of every string; always "translated."
         }
-        return LOCALE_RELIABILITY_CACHE.computeIfAbsent(locale, Functions::computeLocaleReliability);
+        return LOCALE_RELIABILITY_CACHE.computeIfAbsent(language, Functions::computeLocaleReliability);
     }
 
-    private static boolean computeLocaleReliability(Locale locale) {
-        ResourceBundle localized;
-        try {
-            localized = ResourceBundle.getBundle("hudson.Messages", locale);
-        } catch (MissingResourceException x) {
-            return false;
-        }
-        // ResourceBundle silently falls back to a parent bundle (e.g. "zh" or root/English) when
-        // no bundle exists for the exact requested locale; detect that so an untranslated locale
-        // isn't misreported as covered just because it fell back to a different bundle.
-        Locale resolved = localized.getLocale();
-        if (!localizedBundleMatches(resolved, locale)) {
-            return false;
-        }
-        // Deliberately NOT ResourceBundle#keySet()/#containsKey(): both walk the parent chain,
-        // so a bundle missing most of its own translations would still report every base key as
-        // present (inherited from the fallback), always scoring 100%. Reading the specific
-        // locale's .properties file directly, bypassing bundle inheritance, is what actually
-        // measures that file's own translation coverage.
-        Set<String> ownKeys = loadOwnKeys(resolved);
-        if (ownKeys.isEmpty()) {
-            return false;
-        }
-        Set<String> baseKeys = loadOwnKeys(Locale.ROOT);
+    private static boolean computeLocaleReliability(String language) {
+        Locale languageOnly = new Locale(language);
         int total = 0;
         int translated = 0;
-        for (String key : baseKeys) {
-            total++;
-            if (ownKeys.contains(key)) {
-                translated++;
+        for (String bundleBase : COVERAGE_SAMPLE_BUNDLES) {
+            Set<String> baseKeys = loadOwnKeys(bundleBase, Locale.ROOT);
+            if (baseKeys.isEmpty()) {
+                continue; // shouldn't happen for a real entry in COVERAGE_SAMPLE_BUNDLES
+            }
+            total += baseKeys.size();
+            Locale resolved;
+            try {
+                resolved = ResourceBundle.getBundle(bundleBase.replace('/', '.'), languageOnly).getLocale();
+            } catch (MissingResourceException x) {
+                continue; // no bundle at all for this language; contributes 0 translated keys
+            }
+            // ResourceBundle silently falls back to a parent bundle (root/English, or a
+            // different language via the JVM default) when no bundle exists for the exact
+            // requested locale; detect that so an untranslated locale isn't misreported as
+            // covered just because it fell back to a different bundle.
+            if (!localizedBundleMatches(resolved, languageOnly)) {
+                continue;
+            }
+            // Deliberately NOT ResourceBundle#keySet()/#containsKey(): both walk the parent
+            // chain, so a bundle missing most of its own translations would still report every
+            // base key as present (inherited from the fallback), always scoring 100%. Reading
+            // the specific locale's .properties file directly, bypassing bundle inheritance, is
+            // what actually measures that file's own translation coverage.
+            Set<String> ownKeys = loadOwnKeys(bundleBase, resolved);
+            for (String key : baseKeys) {
+                if (ownKeys.contains(key)) {
+                    translated++;
+                }
             }
         }
-        return total > 0 && ((double) translated / total) >= LOCALE_RELIABILITY_THRESHOLD;
+        return total > 0 && ((double) translated / total) > LOCALE_RELIABILITY_THRESHOLD;
     }
 
     private static boolean localizedBundleMatches(Locale resolved, Locale requested) {
@@ -2289,9 +2346,9 @@ public class Functions {
         return !resolved.getLanguage().isEmpty() && resolved.getLanguage().equals(requested.getLanguage());
     }
 
-    private static Set<String> loadOwnKeys(Locale locale) {
+    private static Set<String> loadOwnKeys(String bundleBase, Locale locale) {
         String suffix = locale.toString(); // e.g. "tr", "zh_TW", "pt_BR", or "" for root
-        String resourceName = "/hudson/Messages" + (suffix.isEmpty() ? "" : "_" + suffix) + ".properties";
+        String resourceName = "/" + bundleBase + (suffix.isEmpty() ? "" : "_" + suffix) + ".properties";
         Properties props = new Properties();
         try (InputStream in = Functions.class.getResourceAsStream(resourceName)) {
             if (in == null) {

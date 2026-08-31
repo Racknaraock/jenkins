@@ -101,11 +101,11 @@ THE SOFTWARE.
   </j:if>
 </j:if>
 <x:doctype name="html" />
-<j:set var="pageLocale" value="${h.getReliablePageLocale()}"/>
-<!-- JEP-0000: lang is left as the empty string (its HTML-spec-defined meaning is
-     "primary language unknown") when Jenkins core's translation coverage for the
-     negotiated locale is too low to vouch for it as the page's actual dominant language. -->
-<html lang="${pageLocale != null ? pageLocale.toLanguageTag() : ''}" data-disable-sticky="${h.stickyPositioningDisabled}">
+<!-- JEP-0000: lang declares the negotiated locale when Jenkins core's measured translation
+     coverage for it meets the reliability threshold, and English otherwise. English is what
+     WCAG SC 3.1.1 itself defines as "the language used most" on an under-translated page,
+     since untranslated content always falls back to it. See Functions#getReliablePageLocale(). -->
+<html lang="${h.getReliablePageLocale().toLanguageTag()}" data-disable-sticky="${h.stickyPositioningDisabled}">
   <head data-rooturl="${rootURL}" data-resurl="${resURL}" data-imagesurl="${imagesURL}" resURL="${resURL}"
         data-extensions-available="${extensionsAvailable}"
         data-crumb-header="${h.getCrumbRequestField()}" data-crumb-value="${h.getCrumb(request2)}"

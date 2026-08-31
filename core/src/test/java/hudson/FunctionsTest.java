@@ -797,20 +797,36 @@ class FunctionsTest {
     }
 
     /**
-     * Prototype tests for JEP-0000. hudson.Messages coverage as of this commit (base bundle
-     * has 73 keys, counted via java.util.Properties -- an earlier hand count using a shell
-     * regex undercounted it as 69, which is why these percentages differ slightly from the
-     * JEP's own text if that text predates the fix): es=81%, fr=96%, tr=15%, no zh_CN/zh
-     * bundle exists at all (falls through to root/English). These are real translation
-     * states in this repository, not synthetic fixtures, so a future change to those
-     * .properties files could change these percentages enough to flip a case relative to
-     * the 0.5 threshold -- that coupling to real, evolving translation data is called out
-     * as a known risk in the JEP's Testing section.
+     * Prototype tests for JEP-0000. Coverage aggregated across
+     * {@link Functions#COVERAGE_SAMPLE_BUNDLES} (13 bundles, 759 base keys total) as of this
+     * commit, counted via java.util.Properties: es=61%, fr=78%, tr=27%, sr=71%, ja=58%, no
+     * zh_CN/zh bundle exists at all for any sampled bundle (falls through to English). sr and
+     * ja are deliberately included here even though both were *excluded* under an earlier,
+     * single-bundle version of this measurement (46.6% and 39.7% against hudson.Messages
+     * alone) -- aggregating over more of core's UI text changed which side of the 0.5
+     * threshold they fall on, which is exactly the sampling-bias risk independent review
+     * flagged against the single-bundle version. These are real translation states in this
+     * repository, not synthetic fixtures, so a future change to any sampled .properties file
+     * could shift these percentages enough to flip a case relative to the threshold -- that
+     * coupling to real, evolving translation data is called out as a known risk in the JEP's
+     * Testing section.
      */
     @Test
     void getReliablePageLocale_returnsLocaleForWellTranslatedLanguage() {
         assertEquals(Locale.forLanguageTag("es"), Functions.getReliablePageLocale(Locale.forLanguageTag("es")));
         assertEquals(Locale.forLanguageTag("fr"), Functions.getReliablePageLocale(Locale.forLanguageTag("fr")));
+    }
+
+    /**
+     * Aggregating coverage across more of core's UI text (rather than a single bundle) moves
+     * sr and ja from excluded to included -- direct evidence that the single-bundle
+     * measurement this prototype originally shipped with was not a reliable proxy for a
+     * locale's actual, page-wide translation state.
+     */
+    @Test
+    void getReliablePageLocale_widerSamplingIncludesLocalesTheSingleBundleMeasurementExcluded() {
+        assertEquals(Locale.forLanguageTag("sr"), Functions.getReliablePageLocale(Locale.forLanguageTag("sr")));
+        assertEquals(Locale.forLanguageTag("ja"), Functions.getReliablePageLocale(Locale.forLanguageTag("ja")));
     }
 
     /**
@@ -827,17 +843,27 @@ class FunctionsTest {
     void getReliablePageLocale_treatsRegionQualifiedRequestsLikeTheBareLanguage() {
         assertEquals(Locale.forLanguageTag("fr-FR"), Functions.getReliablePageLocale(Locale.forLanguageTag("fr-FR")));
         assertEquals(Locale.forLanguageTag("es-ES"), Functions.getReliablePageLocale(Locale.forLanguageTag("es-ES")));
-        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("tr-TR")));
+        assertEquals(Locale.ENGLISH, Functions.getReliablePageLocale(Locale.forLanguageTag("tr-TR")));
+    }
+
+    /**
+     * Below the reliability threshold, the fallback is English, not an empty/absent
+     * declaration: Jenkins core's own untranslated content always falls back to English, so
+     * English is the language WCAG SC 3.1.1 itself defines as "used most" on an
+     * under-translated page. An earlier version of this prototype declared lang="" instead
+     * (WHATWG's "primary language unknown" value) -- correct-by-construction in spirit, but
+     * independent review found it still fails SC 3.1.1's own W3C-published conformance test
+     * (ACT rule b5c3f8 scores an empty lang value identically to a missing one), i.e. it did
+     * not actually resolve the criterion it was built to resolve. English does.
+     */
+    @Test
+    void getReliablePageLocale_fallsBackToEnglishForPoorlyTranslatedLanguage() {
+        assertEquals(Locale.ENGLISH, Functions.getReliablePageLocale(Locale.forLanguageTag("tr")));
     }
 
     @Test
-    void getReliablePageLocale_returnsNullForPoorlyTranslatedLanguage() {
-        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("tr")));
-    }
-
-    @Test
-    void getReliablePageLocale_returnsNullWhenNoBundleExistsAtAll() {
-        assertNull(Functions.getReliablePageLocale(Locale.forLanguageTag("zh-CN")));
+    void getReliablePageLocale_fallsBackToEnglishWhenNoBundleExistsAtAll() {
+        assertEquals(Locale.ENGLISH, Functions.getReliablePageLocale(Locale.forLanguageTag("zh-CN")));
     }
 
     @Test
